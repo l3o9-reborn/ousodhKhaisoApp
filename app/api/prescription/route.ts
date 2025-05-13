@@ -1,39 +1,70 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
-import { PrismaClient } from '@/lib/generated/prisma';
-import { PDFDocument, rgb } from 'pdf-lib';
+import { prisma } from '@/lib/prisma';
+import { PDFDocument } from 'pdf-lib';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs/promises';
 import path from 'path';
-import formidable from 'formidable';
 
-const prisma = new PrismaClient();
-
+// Disable Next.js default body parser
 export const config = {
   api: {
-    bodyParser: false, // Required for formidable
+    bodyParser: false,
   },
 };
 
-async function parseForm(req: NextRequest): Promise<{ emrId: string; file: File }> {
-  return new Promise((resolve, reject) => {
-    const form = formidable({ multiples: false });
+// Helper to parse multipart form data
+async function parseMultipartFormData(req: NextRequest): Promise<{ emrId: string; files: File[] }> {
+  const formData = await req.formData();
+  const emrId = formData.get('emrId') as string;
 
-    form.parse(req as any, (err, fields, files) => {
-      if (err) return reject(err);
-      const emrId = fields.emrId?.[0];
-      const file = files.file?.[0];
-      if (!emrId || !file) return reject('Missing emrId or file');
-      resolve({ emrId, file });
-    });
+  if (!emrId) {
+    throw new Error('Missing emrId');
+  }
+
+  const files: File[] = [];
+  formData.forEach((value, key) => {
+    if (key === 'file' && value instanceof File) {
+      files.push(value);
+    }
   });
+
+  if (files.length === 0) {
+    throw new Error('No files uploaded');
+  }
+
+  return { emrId, files };
 }
 
+// Helper to save files to a temporary directory
+async function saveFilesToTemp(files: File[]): Promise<string[]> {
+  const tempDir = path.join(process.cwd(), 'uploads');
+  await fs.mkdir(tempDir, { recursive: true });
+
+  const filePaths: string[] = [];
+  for (const file of files) {
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const filePath = path.join(tempDir, `${uuidv4()}-${file.name}`);
+    await fs.writeFile(filePath, buffer);
+    filePaths.push(filePath);
+  }
+
+  return filePaths;
+}
+
+// Helper to convert a single image file into a PDF
 async function convertImageToPdf(imagePath: string): Promise<Uint8Array> {
   const pdfDoc = await PDFDocument.create();
   const imageBytes = await fs.readFile(imagePath);
 
-  const image = await pdfDoc.embedJpg(imageBytes).catch(() => pdfDoc.embedPng(imageBytes));
+  let image;
+  try {
+    image = await pdfDoc.embedJpg(imageBytes);
+  } catch {
+    image = await pdfDoc.embedPng(imageBytes);
+  }
+
   const page = pdfDoc.addPage([image.width, image.height]);
   page.drawImage(image, {
     x: 0,
@@ -45,50 +76,61 @@ async function convertImageToPdf(imagePath: string): Promise<Uint8Array> {
   return await pdfDoc.save();
 }
 
+// API POST handler
 export async function POST(req: NextRequest) {
   try {
-    const { emrId, file }: any = await parseForm(req);
+    console.log('Parsing form data...');
+    const { emrId, files } = await parseMultipartFormData(req);
+    console.log('Form data parsed successfully:', { emrId, files });
 
-    const fileBuffer = await fs.readFile(file.filepath);
-    const imageExt = path.extname(file.originalFilename || '.jpg');
-    const imageFilename = `images/${uuidv4()}${imageExt}`;
-    const pdfFilename = `pdfs/${uuidv4()}.pdf`;
+    console.log('Saving files to temporary directory...');
+    const imagePaths = await saveFilesToTemp(files);
+    console.log('Files saved:', imagePaths);
 
-    // Upload image
-    const { data: imgUpload, error: imgErr } = await supabase.storage
-      .from('prescriptions')
-      .upload(imageFilename, fileBuffer, {
-        contentType: file.mimetype,
+    const pdfUrls: string[] = [];
+
+    for (const imagePath of imagePaths) {
+      console.log(`Converting image ${imagePath} to PDF...`);
+      const pdfBytes = await convertImageToPdf(imagePath);
+      console.log('PDF conversion successful');
+
+      const pdfFilename = `pdfs/${uuidv4()}.pdf`;
+      console.log(`Uploading PDF ${pdfFilename} to Supabase...`);
+      const { error: pdfErr } = await supabase.storage
+        .from('prescriptions')
+        .upload(pdfFilename, Buffer.from(pdfBytes), {
+          contentType: 'application/pdf',
+        });
+
+      if (pdfErr) throw new Error(pdfErr.message);
+      console.log('PDF uploaded successfully');
+
+      const pdfUrl = supabase.storage.from('prescriptions').getPublicUrl(pdfFilename).data.publicUrl;
+      console.log('PDF URL:', pdfUrl);
+
+      pdfUrls.push(pdfUrl);
+
+      console.log('Saving PDF URL to database...');
+      await prisma.prescription.create({
+        data: {
+          emrId,
+          pdfUrl,
+          imageUrl: 'not-available', // No image URL since it's converted to PDF
+          isActive: false,
+        },
       });
+      console.log('PDF URL saved to database successfully');
+    }
 
-    if (imgErr) throw new Error(imgErr.message);
+    console.log('All PDFs uploaded and saved to database successfully');
 
-    // Convert and upload PDF
-    const pdfBytes = await convertImageToPdf(file.filepath);
-    const { data: pdfUpload, error: pdfErr } = await supabase.storage
-      .from('prescriptions')
-      .upload(pdfFilename, pdfBytes, {
-        contentType: 'application/pdf',
-      });
-
-    if (pdfErr) throw new Error(pdfErr.message);
-
-    // Get public URLs
-    const imageUrl = supabase.storage.from('prescriptions').getPublicUrl(imageFilename).data.publicUrl;
-    const pdfUrl = supabase.storage.from('prescriptions').getPublicUrl(pdfFilename).data.publicUrl;
-
-    // Save to DB
-    await prisma.prescription.create({
-      data: {
-        emrId,
-        imageUrl,
-        pdfUrl,
-        isActive: false,
-      },
+    return NextResponse.json({
+      success: true,
+      message: 'Images converted to PDFs and uploaded successfully.',
+      pdfUrls,
     });
-
-    return NextResponse.json({ success: true, message: 'Prescription uploaded successfully.' });
   } catch (err: any) {
+    console.error('Error in POST handler:', err);
     return NextResponse.json({ success: false, error: err.message || 'Upload failed' }, { status: 500 });
   }
 }

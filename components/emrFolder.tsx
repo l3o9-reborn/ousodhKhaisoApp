@@ -31,27 +31,71 @@ type EMRFolderProps={
   id: string
   name: string;
   createdAt: string
+  pdfUrls: string[]
 }
 
 
 
 
 
-function EMRFolder({ id, name, createdAt}: EMRFolderProps) {
+function EMRFolder({ id, name, createdAt, pdfUrls}: EMRFolderProps) {
 
 const router=  useRouter()
 const[openDialog, setOpenDialog]= useState(false)
+const [newName, setNewName] = useState(name)
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
 
   
 const intoFolder=()=>{
     router.push(`/emrs/${id}`)
 }
 
-const deleteFolder=()=>{
-  alert('Delete')
+const deleteFolder=async()=>{
+  try {
+
+    const res= await fetch(`/api/emrs/${id}`,{
+      method:"DELETE"
+    })
+    if (res.ok) {
+        // Maybe provide a success message here or refresh data
+        console.log("Folder deleted successfully");
+        router.refresh()
+    }
+  } catch (error) {
+    console.log("Error Deleting EMR")
+  }
 }
-const editFolder=()=>{
-  alert('Edit')
+const editFolder=async()=>{
+
+    setLoading(true);
+    setError('');
+    setSuccess('');
+
+
+  try {
+      const res = await fetch(`/api/emrs/${id}`, {
+        method: "PUT",
+        body: JSON.stringify({ name: newName }), // Send updated name
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      if (res.ok) {
+        setSuccess('Record updated successfully!');
+        console.log("Folder updated");
+        setOpenDialog(false); // Close dialog after save
+        router.refresh()
+      } else {
+        setError(result.error || 'Failed to update record');
+        console.log("Error updating folder");
+      }
+    } catch (error) {
+      setError('An error occurred while updating record');
+      console.log("Error editing folder", error);
+    } finally {
+      setLoading(false);
+    }
 }
 
 
@@ -74,10 +118,8 @@ const editFolder=()=>{
       <DropdownMenuContent className=" absolute top-[-120px] right-[-120px] opacity-90">
         <DropdownMenuLabel>{name}</DropdownMenuLabel>
         <DropdownMenuSeparator />
-        <DropdownMenuItem>
-          <span onClick={deleteFolder}>
+        <DropdownMenuItem onClick={deleteFolder}>
             Delete
-          </span>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>
           <Dialog>
@@ -88,20 +130,28 @@ const editFolder=()=>{
                   <DialogHeader>
                     <DialogTitle>Edit Record</DialogTitle>
                   </DialogHeader>
-                  <DialogDescription className="space-y-2">
+                  {/* <DialogDescription className="space-y-2"> */}
 
                       <Input
+                      value={newName}
+                      onChange={(e) => setNewName(e.target.value)}
                       placeholder="Patient Name"
                           className='block w-full border-gray-300 rounded p-2'
                       />
+
+                      {/* Show success or error messages */}
+                      {error && <div className="text-red-500">{error}</div>}
+                      {success && <div className="text-green-500">{success}</div>}
+
                       <Button
                         onClick={editFolder}
-                      className='bg-amber-600 hover:bg-amber-500 mt-3'
+                      className='bg-amber-600 hover:bg-amber-500 mt-3 '
+                      disabled={loading}
                       >
-                          Save Record
+                         {loading ? 'Saving...' : 'Save Record'}
                       </Button>
-
-                  </DialogDescription>
+{/* 
+                  </DialogDescription> */}
 
               </DialogContent>
           </Dialog>

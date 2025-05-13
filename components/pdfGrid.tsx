@@ -1,42 +1,41 @@
-'use client'
+'use client';
 
-import { useState } from 'react'
-import dynamic from 'next/dynamic'
+import { useState } from 'react';
+import dynamic from 'next/dynamic';
+import { Worker, Viewer } from '@react-pdf-viewer/core';
+
+import '@react-pdf-viewer/core/lib/styles/index.css';
 
 const PdfModalViewer = dynamic(() => import('./pdfModalViewer'), {
   ssr: false,
-})
+});
 
-const pdfFiles: string[] = [
-  '/files/1.pdf',
-  '/files/2.pdf',
-  '/files/3.pdf',
-  // Add more if needed
-]
-
-export default function PdfGrid() {
-  const [selectedPdf, setSelectedPdf] = useState<string | null>(null)
+export default function PdfGrid({ prescriptions }: { prescriptions: { id: string; pdfUrl: string }[] }) {
+  const [selectedPdf, setSelectedPdf] = useState<{ id: string; pdfUrl: string } | null>(null);
 
   return (
     <>
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 p-4">
-        {pdfFiles.map((url, i) => (
+      <div className="grid grid-cols-[repeat(auto-fill,_minmax(200px,1fr))] gap-4">
+        {prescriptions.map((prescription) => (
           <div
-            key={i}
-            className="border rounded shadow cursor-pointer"
-            onClick={() => setSelectedPdf(url)}
+            key={prescription.id}
+            className="border rounded shadow cursor-pointer overflow-hidden bg-white"
+            onClick={() => setSelectedPdf(prescription)}
           >
-            <div className="aspect-[3/4] bg-gray-100 flex items-center justify-center text-gray-500">
-                {i + 1}
+            <div className="aspect-[3/4] max-h-[400px] bg-gray-50 flex items-center justify-center">
+              <iframe
+                src={`${prescription.pdfUrl}#toolbar=0&view=Fit`}
+                className="w-full h-full object-cover bg-white"
+              ></iframe>
             </div>
-            <div className="p-2 text-sm truncate">{url.split('/').pop()}</div>
+            <div className="p-2 text-sm truncate">{prescription.id}</div>
           </div>
         ))}
       </div>
 
       {selectedPdf && (
-        <PdfModalViewer fileUrl={selectedPdf} onClose={() => setSelectedPdf(null)} />
+        <PdfModalViewer prescription={selectedPdf} onClose={() => setSelectedPdf(null)} />
       )}
     </>
-  )
+  );
 }
